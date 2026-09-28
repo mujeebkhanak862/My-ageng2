@@ -1,0 +1,144 @@
+name: Build Release Artifacts
+
+# User-requested (jaise pichle "calculator app" project mein hua tha):
+# GitHub ke apne servers par APK/Windows/Linux build karo aur download
+# ke liye taiyar rakho — is sandbox mein koi Android/Windows/Linux/
+# Flutter build toolchain available nahi thi, is liye yeh workflow
+# GitHub Actions ke runners par chalta hai, jahan yeh sab pehle se hota
+# hai (ya ek step mein install ho jaata hai).
+#
+# ISTEMAL KAISE KAREIN:
+#   1. Is poore repo (control_api + shared_app + .github, sab kuch) ko
+#      GitHub par ek naye repository mein push/upload karein.
+#   2. GitHub par apne repo ke "Actions" tab par jaayein.
+#   3. Agar `main` branch par push kiya hai, yeh khud-ba-khud chal jaayega.
+#      Warna "Build Release Artifacts" workflow chuno aur "Run workflow"
+#      button dabayein (manual trigger).
+#   4. Jab teeno jobs (Android/Windows/Linux) hari tick ke saath khatam ho
+#      jaayein, us specific run ko kholein — sabse neeche "Artifacts"
+#      section mein teen zip/apk files milengi, seedha download button se.
+#
+# NOTE — `control_api` (backend server) yahan shamil NAHI hai: woh ek
+# downloadable "app" nahi, ek server hai jo kahin host hona chahiye
+# (jaise Railway — dekhein HOW_TO_CONNECT.md). Yeh workflow sirf teeno
+# CLIENT apps (jo device par install hoti hain) build karta hai.
+
+on:
+  workflow_dispatch:  # "Run workflow" button se manually chalane ke liye
+  push:
+    branches: [main]
+    paths:
+      - 'shared_app/**'
+      - '.github/workflows/build_release_artifacts.yml'
+
+jobs:
+  build-android:
+    name: Android APK
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: shared_app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      # NOTE — real keystore (Play Store ke liye) is repo mein kabhi
+      # commit nahi hoti (dekhein android/app/key.properties.example +
+      # root .gitignore). Yahan `key.properties` na hone ki wajah se yeh
+      # build DEBUG key se sign hogi — install/test karne ke liye poori
+      # tarah chalegi, bas Play Store par upload nahi hogi. Agar aage
+      # jaakar real signing bhi CI se chahiye ho, GitHub repo Settings ->
+      # Secrets mein apni keystore (base64-encoded) aur passwords add
+      # karke, is step se pehle ek "echo secrets to key.properties" step
+      # add kiya ja sakta hai — abhi is se bacha gaya hai taaki bina
+      # kisi setup ke bhi yeh workflow turant chal sake.
+      - name: Build APK (release)
+        run: flutter build apk --release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: shared_app/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+
+  build-windows:
+    name: Windows EXE
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: shared_app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build Windows
+        run: flutter build windows --release
+
+      - name: Zip the Windows build
+        run: Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath device_agent_windows.zip
+
+      - name: Upload Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          path: shared_app/device_agent_windows.zip
+          if-no-files-found: error
+
+  build-linux:
+    name: Linux binary
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: shared_app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      # Yeh native libraries (GTK, PipeWire screen-capture, X11 input,
+      # JPEG encode, Evolution Data Server contacts) Flutter khud install
+      # nahi karta — Linux desktop target ke liye zaroori hain.
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config \
+            libgtk-3-dev libpipewire-0.3-dev libx11-dev libxtst-dev \
+            libturbojpeg0-dev libebook1.2-dev
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build Linux
+        run: flutter build linux --release
+
+      - name: Zip the Linux build
+        run: |
+          cd build/linux/x64/release/bundle
+          zip -r ../../../../../device_agent_linux.zip .
+
+      - name: Upload Linux build
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-build
+          path: shared_app/device_agent_linux.zip
+          if-no-files-found: error
